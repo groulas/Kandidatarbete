@@ -1,0 +1,255 @@
+from psychopy import visual, core, event
+import random
+import csv
+from datetime import datetime
+import os
+import statistics
+
+# === Inställningar ===
+colors = ['red', 'green', 'blue']
+fonts = ['Times New Roman', 'Comic Sans MS']
+congruencies = ['congruent', 'incongruent']
+repetitions = 4  # Ökat för kongruenta trials till 4 reps
+test_mode = False  # Sätt till True för snabbtest
+
+# === Säkerställ katalog ===
+os.makedirs("stroop", exist_ok=True)
+
+# === Generera unikt 3-siffrigt ID ===
+used_ids_file = "stroop/used_ids.txt"
+used_ids = set()
+
+if os.path.exists(used_ids_file):
+    with open(used_ids_file, 'r') as f:
+        used_ids = set(line.strip() for line in f)
+
+if len(used_ids) >= 1000:
+    print("Alla ID:n är använda!")
+    core.quit()
+
+while True:
+    participant_id = f"{random.randint(0, 999):03d}"
+    if participant_id not in used_ids:
+        break
+
+with open(used_ids_file, 'a') as f:
+    f.write(participant_id + '\n')
+
+# === Fönster ===
+win = visual.Window(size=(1000, 700), color='grey', units='pix', fullscr=True)
+
+# === Instruktion ===
+instr = visual.TextStim(win, text="Namnge färgen, inte ordet!\nTryck r för RÖD, g för GRÖN, b för BLÅ.\nTryck valfri tangent för att börja.", height=30)
+instr.draw()
+win.flip()
+event.waitKeys()
+
+# === Trialgenerering (balanserad) ===
+practice_trials = []
+main_trials = []
+
+# Dolda uppvärmningsförsök (4 st)
+for _ in range(4):
+    word = random.choice(colors)
+    ink_color = random.choice(colors)
+    while ink_color == word:
+        ink_color = random.choice(colors)
+    font = random.choice(fonts)
+    practice_trials.append({
+        'word': word,
+        'ink_color': ink_color,
+        'font': font,
+        'congruency': 'practice'
+    })
+
+# Kongruenta trials: 3 färger × 2 typsnitt × 4 reps = 24
+for _ in range(4):
+    for font in fonts:
+        for color in colors:
+            main_trials.append({
+                'word': color,
+                'ink_color': color,
+                'font': font,
+                'congruency': 'congruent'
+            })
+
+# Inkongruenta trials: 3 felmatchningar av 6 möjliga per typsnitt × 4 reps = 24
+incongruent_pairs_all = [(w, c) for w in colors for c in colors if w != c]
+for _ in range(4):
+    for font in fonts:
+        sampled_pairs = random.sample(incongruent_pairs_all, 3)
+        for word, ink_color in sampled_pairs:
+            main_trials.append({
+                'word': word,
+                'ink_color': ink_color,
+                'font': font,
+                'congruency': 'incongruent'
+            })
+
+random.shuffle(practice_trials)
+random.shuffle(main_trials)
+
+# === TESTMODE ===
+if test_mode:
+    main_trials = main_trials[:4]
+    practice_trials = []
+
+# === Stimuluskomponent och tangentbindning ===
+text_stim = visual.TextStim(win, text='', height=80)
+color_keys = {'red': 'r', 'green': 'g', 'blue': 'b'}
+
+# === Datainsamling ===
+results = {'participant_id': participant_id}
+
+# === Skapa unikt filnamn för long-format CSV ===
+timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+trial_csv_file = f"stroop/stroop_{participant_id}_{timestamp}.csv"
+trial_fieldnames = [
+    'participant_id', 'trial_number', 'word', 'ink_color', 'font',
+    'congruency', 'response', 'correct', 'rt'
+]
+trial_log = []
+
+# Statistik
+rt_by_font = {font: [] for font in fonts}
+rt_by_congruency = {c: [] for c in congruencies}
+rt_by_combination = {}
+errors_by_combination = {}
+total_by_combination = {}
+
+for font in fonts:
+    for cong in congruencies:
+        key = f"{font}_{cong}"
+        rt_by_combination[key] = []
+        errors_by_combination[key] = 0
+        total_by_combination[key] = 0
+
+clock = core.Clock()
+trial_number = 0
+
+# === Uppvärmningsförsök ===
+for trial in practice_trials:
+    text_stim.text = trial['word']
+    text_stim.color = trial['ink_color']
+    text_stim.font = trial['font']
+    text_stim.draw()
+    win.flip()
+
+    clock.reset()
+    keys = event.waitKeys(keyList=['r', 'g', 'b', 'escape'], timeStamped=clock)
+
+    if keys[0][0] == 'escape':
+        break
+
+    win.flip()
+    core.wait(0.5)
+
+# === Huvudförsök ===
+for trial in main_trials:
+    trial_number += 1
+    text_stim.text = trial['word']
+    text_stim.color = trial['ink_color']
+    text_stim.font = trial['font']
+    text_stim.draw()
+    win.flip()
+
+    clock.reset()
+    keys = event.waitKeys(keyList=['r', 'g', 'b', 'escape'], timeStamped=clock)
+
+    if keys[0][0] == 'escape':
+        break
+
+    response = keys[0][0]
+    rt = keys[0][1]
+    correct = response == color_keys[trial['ink_color']]
+
+    # Till SPSS-vänlig CSV
+    prefix = f"trial{trial_number:02d}"
+    results[f"{prefix}_word"] = trial['word']
+    results[f"{prefix}_ink_color"] = trial['ink_color']
+    results[f"{prefix}_font"] = trial['font']
+    results[f"{prefix}_congruency"] = trial['congruency']
+    results[f"{prefix}_response"] = response
+    results[f"{prefix}_correct"] = int(correct)
+    results[f"{prefix}_rt"] = rt
+
+    # Till long-format logg
+    trial_log.append({
+        'participant_id': participant_id,
+        'trial_number': trial_number,
+        'word': trial['word'],
+        'ink_color': trial['ink_color'],
+        'font': trial['font'],
+        'congruency': trial['congruency'],
+        'response': response,
+        'correct': int(correct),
+        'rt': round(rt, 4)
+    })
+
+    combo_key = f"{trial['font']}_{trial['congruency']}"
+    total_by_combination[combo_key] += 1
+    if not correct:
+        errors_by_combination[combo_key] += 1
+    else:
+        rt_by_font[trial['font']].append(rt)
+        rt_by_congruency[trial['congruency']].append(rt)
+        rt_by_combination[combo_key].append(rt)
+
+    win.flip()
+    core.wait(0.5)
+
+# === Medelvärden ===
+for font in fonts:
+    key = f"mean_rt_{font.lower().replace(' ', '_')}"
+    results[key] = round(statistics.mean(rt_by_font[font]), 3) if rt_by_font[font] else 'NA'
+
+for cong in congruencies:
+    key = f"mean_rt_{cong}"
+    results[key] = round(statistics.mean(rt_by_congruency[cong]), 3) if rt_by_congruency[cong] else 'NA'
+
+combo_labels_rt = {
+    'Times New Roman_congruent': 'RT_Times_Kong',
+    'Times New Roman_incongruent': 'RT_Times_Inkong',
+    'Comic Sans MS_congruent': 'RT_Comic_Kong',
+    'Comic Sans MS_incongruent': 'RT_Comic_Inkong'
+}
+
+for combo_key, label in combo_labels_rt.items():
+    values = rt_by_combination[combo_key]
+    results[label] = round(statistics.mean(values), 3) if values else 'NA'
+
+combo_labels_err = {
+    'Times New Roman_congruent': 'Fel_Times_Kong',
+    'Times New Roman_incongruent': 'Fel_Times_Inkong',
+    'Comic Sans MS_congruent': 'Fel_Comic_Kong',
+    'Comic Sans MS_incongruent': 'Fel_Comic_Inkong'
+}
+
+for combo_key, label in combo_labels_err.items():
+    total = total_by_combination[combo_key]
+    errors = errors_by_combination[combo_key]
+    results[label] = round(errors / total, 3) if total > 0 else 'NA'
+
+# === Spara SPSS-vänlig CSV ===
+csv_file = "stroop/stroop_spss_friendly.csv"
+write_header = not os.path.exists(csv_file)
+
+with open(csv_file, 'a', newline='') as f:
+    writer = csv.DictWriter(f, fieldnames=results.keys())
+    if write_header:
+        writer.writeheader()
+    writer.writerow(results)
+
+# === Spara long-format CSV med unikt namn ===
+with open(trial_csv_file, 'w', newline='') as f:
+    writer = csv.DictWriter(f, fieldnames=trial_fieldnames)
+    writer.writeheader()
+    writer.writerows(trial_log)
+
+# === Avslutning ===
+thanks = visual.TextStim(win, text="Tack för att du deltog!", height=40)
+thanks.draw()
+win.flip()
+core.wait(2)
+win.close()
+core.quit()
